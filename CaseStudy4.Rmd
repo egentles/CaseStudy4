@@ -1,0 +1,325 @@
+---
+title: "Case Study 4"
+author: "Emily Gentles"
+date: "3/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(readxl)
+#install.packages('dplyr', dependencies = TRUE)
+library(dplyr)
+library(lme4)
+#install.packages('brms', dependencies=TRUE)
+library(brms)
+library(rstan)
+library(StanHeaders)
+library(rstanarm)
+#library(tidyverse)
+library(tidyr)
+library(rgeos)
+library(rgdal)
+library(bayesplot)
+library(latex2exp)
+library(coda)
+library(haven) # to load the SPSS .sav file
+library(RColorBrewer) # needed for some extra colours in one of the graphs
+#install.packages('ggmcmc', dependencies = TRUE)
+#library(ggmcmc)
+#install.packages('mcmcplots', dependencies = TRUE)
+#library(mcmcplots) 
+```
+
+```{r}
+chem <- read.csv("data.csv")
+#colnames(chem) <- c("heat.coef", "thermal.efficiency", "F.flow", "S.flow", "S.nozzel.size", "S.inlet.temp")
+```
+
+```{r EDA}
+#par(mfrow = c(2,4))
+#plot(chem$X1, chem$Y1)
+#plot(chem$X1, chem$Y2)
+#plot(chem$X2, chem$Y1)
+#plot(chem$X2, chem$Y2)
+#plot(chem$X3, chem$Y1)
+#plot(chem$X3, chem$Y2)
+#plot(chem$X4, chem$Y1)
+#plot(chem$X4, chem$Y2)
+
+par(mfrow = c(1,1))
+
+
+plot(chem$X1-chem$X2, chem$Y2)
+
+chem %>%
+  ggplot(aes(x =X4, y=Y2)) +
+  geom_point() +
+  facet_wrap(as.factor(chem$X3))
+```
+# Outliers
+
+Seems that observation 4, Y1 = 549.41, is an outlier
+Test again without observation 4, no outliers!
+
+```{r}
+chem.s <- chem[c(1:3,5:20),]
+
+boxplot(x=chem$Y1, range=1.5, horizontal = TRUE, varwidth=FALSE, notch=FALSE, outline=TRUE, boxwex=0.3, border = c("blue"), xlab = "Heat Transfer Coefficient")
+
+boxplot(x=chem.s$Y1, range=1.5, horizontal = TRUE, varwidth=FALSE, notch=FALSE, outline=TRUE, boxwex=0.3, border = c("blue"), xlab = "Heat Transfer Coefficient without Outlier")
+
+```
+
+
+#Velocity
+
+```{r}
+#chem.s$X3 <- as.numeric(chem.s$X3)
+v <- chem.s$X2/(0.5*chem.s$X3*pi)
+chem.s$V <- v
+
+v <- chem$X2/(0.5*chem$X3*pi)
+chem$V <- v
+
+plot(chem.s$V, chem.s$Y1)
+#m <- lm(Y1~V+V:X4, data = chem.s)
+#summary(m)
+#plot(m)
+#plot(chem.s$V,predict(m), ylim = c(0,600))
+#par(new=TRUE)
+#plot(chem.s$V, chem.s$Y1, col = 'blue', ylim = c(0,600))
+
+#plot(chem$V*sqrt(chem$X4),chem$Y1)
+
+#ggplot(data = chem.s, aes(x=V,y=Y1)) +
+#  geom_point() +
+#  geom_smooth(method = "lm")
+```
+
+```{r}
+freq <- lmer(Y1 ~ 1 + V + (1|X3), data = chem.s)
+head(ranef(freq)$X3)
+plot(predict(freq),chem.s$Y1)
+plot(freq)
+```
+
+# BRMS: Question 1
+
+
+```{r}
+chem.s %>%
+  ggplot(aes(x = X4,
+             y = Y1)) +
+  geom_point()+ #to add some random noise for plotting purposes
+  theme_minimal()+
+  geom_smooth(method = "lm",  # to add  the linear relationship
+              aes(color = "linear"),
+              se = FALSE) +
+  geom_smooth(method = "lm",
+              formula = chem.s$Y1 ~ chem.s$X4 + I(chem.s$X4^2),# to add  the quadratic relationship
+              aes(color = "quadratic"),
+              se = FALSE) +
+  labs(title    = "Delay vs. age",
+       subtitle = "There seems to be some quadratic relationship",
+       x        = "Age",
+       y        = "Delay",
+       color    = "Type of relationship" ) +
+  theme(legend.position = "bottom")
+
+
+model.brm <- brm(formula = Y1 ~ V+X4+X1,
+                 data = chem,
+                 seed = 22,
+                 family = student)
+summary(model.brm)
+
+```
+
+```{r}
+#chem.s$X2/(0.5*chem.s$X3*pi)
+
+prior1 <- c(set_prior("gamma(2,.5)", class = "b", coef = "V"),
+            set_prior("gamma(5,.5)", class = "b", coef = "X1"))
+
+#prior1 <- c(set_prior("gamma(5,.5)", class = "b", coef = "X1"))
+
+model.brm.s <- brm(formula = Y1 ~ V+X1+V:X4+X1:X2,
+                 data = chem.s, warmup = 2000,
+                 iter = 10000, chains = 2,
+                 seed = 22, control = list(adapt_delta = 0.99),
+                 prior = prior1,
+                 family = gaussian,
+                 sample_prior = TRUE)
+summary(model.brm.s)
+posterior_summary(model.brm.s)
+
+plot(hypothesis(model.brm.s, "V > 0"))
+#plot(hypothesis(model.brm.s, "X4 > 0"))
+plot(hypothesis(model.brm.s, "X1 > 0"))
+```
+# Prior Exploration
+
+```{r}
+g <- rgamma(10000,7,.1)
+plot(density(g), ylim = c(0,1))
+```
+
+# Model Fit
+
+```{r}
+mcmc_plot(model.brm.s, type = "trace")
+mcmc_plot(model.brm.s, type = "hist")
+mcmc_plot(model.brm.s, type = "acf")
+
+modelposterior <- as.mcmc(model.brm.s) # with the as.mcmc() command we can use all the CODA package convergence statistics and plotting options
+gelman.diag(modelposterior[, 1:5])
+gelman.plot(modelposterior[, 1:5])
+geweke.diag(modelposterior[, 1:5])
+geweke.plot(modelposterior[, 1:5])
+#round(100*((summary(model.brm.s)$fixed - summary(model)$fixed) / summary(model)$fixed), 3)[,"Estimate"]
+```
+
+```{r}
+summary(model.brm.s)
+
+post <- posterior_predict(model.brm.s)
+plot(density(post), xlim = c(-250,500), ylim = c(0,0.01), main = "")
+par(new = TRUE)
+plot(density(chem.s$Y1), col = "blue", xlim = c(-250,500), ylim = c(0,0.01), main = "Observed vs Predicted Distribution")
+
+pp_check(model.brm.s, nsamples = 100)
+```
+
+# Prediction: Question 2
+
+```{r}
+newdata <- data.frame(X1 = 116.9,
+                      X2 = 172.1,
+                      V = 172.1/(.5*45*pi),
+                      X4 = mean(chem.s$X4))
+
+predict(model.brm.s, newdata = newdata)
+post.samp <- posterior_predict(model.brm.s, newdata)
+plot(density(post.samp))
+z <- sum(post.samp > 100)
+z/length(post.samp)
+```
+# Binary Y1: Question 3
+
+```{r}
+Y1.ind <- matrix(nrow = 20, ncol = 1)
+chem$Y1.ind <- Y1.ind
+for(i in 1:20){
+  if(chem$Y1[i] > 100){
+    chem$Y1.ind[i] = 1}
+  else{
+    chem$Y1.ind[i] = 0
+  }
+}
+
+chem %>%
+  ggplot(aes(x = X4, y = Y1.ind)) +
+  geom_point()
+```
+
+```{r}
+prior1 <- c(set_prior("gamma(2,.5)", class = "b", coef = "V"),
+            set_prior("gamma(5,.5)", class = "b", coef = "X1"))
+
+#prior1 <- c(set_prior("gamma(5,.5)", class = "b", coef = "X1"))
+
+model.brm.b <- brm(formula = Y1.ind ~ V+X1+V:X4+X1:X2,
+                 data = chem, warmup = 2000,
+                 iter = 10000, chains = 2,
+                 seed = 22, control = list(adapt_delta = 0.99),
+                 prior = prior1,
+                 family = bernoulli(link = "logit"),
+                 sample_prior = TRUE)
+summary(model.brm.b)
+posterior_summary(model.brm.b)
+pp_check(model.brm.b, nsamples = 1000)
+```
+As velocity increases, more likely for Y1 > 100 (as odds > 1)
+
+```{r}
+predict(model.brm.b)
+post.samp <- posterior_predict(model.brm.b)
+plot(density(post.samp))
+z <- sum(post.samp > .5)
+z/length(post.samp)
+```
+
+
+
+# Model Fit
+
+```{r}
+mcmc_plot(model.brm.b, type = "trace")
+mcmc_plot(model.brm.b, type = "hist")
+mcmc_plot(model.brm.b, type = "acf")
+
+modelposterior <- as.mcmc(model.brm.b) # with the as.mcmc() command we can use all the CODA package convergence statistics and plotting options
+gelman.diag(modelposterior[, 1:5])
+gelman.plot(modelposterior[, 1:5])
+geweke.diag(modelposterior[, 1:5])
+geweke.plot(modelposterior[, 1:5])
+#round(100*((summary(model.brm.s)$fixed - summary(model)$fixed) / summary(model)$fixed), 3)[,"Estimate"]
+
+exp(fixef(model.brm.b)[,-2])
+mcmc_plot(model.brm.b, type = "intervals")
+```
+
+```{r}
+Pred <- predict(model.brm.b, type = "response")
+Pred <- if_else(Pred[,1] > 0.5, 1, 0)
+ConfusionMatrix <- table(Pred, pull(chem, Y1.ind)) #`pull` results in a vector
+#correct classification rate
+sum(diag(ConfusionMatrix))/sum(ConfusionMatrix)
+
+```
+
+# Predicting Y2: Question 4
+
+```{r}
+#chem.s$X2/(0.5*chem.s$X3*pi)
+
+prior1 <- c(set_prior("gamma(2,.5)", class = "b", coef = "V"),
+            set_prior("gamma(5,.5)", class = "b", coef = "X1"))
+
+#prior1 <- c(set_prior("gamma(5,.5)", class = "b", coef = "X1"))
+
+model.brm.2 <- brm(formula = Y2 ~ V+X1+V:X4+X1:X2,
+                 data = chem, warmup = 2000,
+                 iter = 10000, chains = 2,
+                 seed = 22, control = list(adapt_delta = 0.99),
+                 prior = prior1,
+                 family = gaussian,
+                 sample_prior = TRUE)
+summary(model.brm.2)
+posterior_summary(model.brm.2)
+
+plot(hypothesis(model.brm.2, "V > 0"))
+#plot(hypothesis(model.brm.s, "X4 > 0"))
+plot(hypothesis(model.brm.2, "X1 > 0"))
+```
+
+
+```{r}
+summary(model.brm.2)
+
+post <- posterior_predict(model.brm.2)
+plot(density(post), xlim = c(-250,500), ylim = c(0,0.057), main = "")
+par(new = TRUE)
+plot(density(chem$Y2), col = "blue", xlim = c(-250,500), ylim = c(0,0.057), main = "Observed vs Predicted Distribution")
+
+pp_check(model.brm.2, nsamples = 100)
+```
+
+# References 
+https://vtechworks.lib.vt.edu/bitstream/handle/10919/76414/LD5655.V855_1984.B694.pdf?sequence=1&isAllowed=y
+
+https://www.engineeringtoolbox.com/orifice-nozzle-venturi-d_590.html
+
+https://www.rensvandeschoot.com/brms-wambs/
